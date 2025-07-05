@@ -109,6 +109,9 @@ final class UserManager: UserManagerProtocol {
         
         print("Adding user: \(user.name ?? user.email) with ID: \(user.id.uuidString)")
         
+        // Reload all users from Keychain to ensure we have the latest data
+        await loadAllUsersFromKeychain()
+        
         // Check if user already exists
         if allUsers.contains(where: { $0.id == user.id }) {
             print("User already exists, setting as current user")
@@ -125,7 +128,7 @@ final class UserManager: UserManagerProtocol {
         currentUser = user
         UserDefaults.standard.set(user.id.uuidString, forKey: "current_user_id")
         
-        // Save user list to UserDefaults
+        // Save user list to UserDefaults for backup
         try saveUserList()
         
         print("Successfully added user: \(user.name ?? user.email) and set as current user")
@@ -180,33 +183,26 @@ final class UserManager: UserManagerProtocol {
         defer { isLoading = false }
         
         do {
-            // Try to load from UserDefaults first
-            if let data = UserDefaults.standard.data(forKey: "user_list"),
-               let users = try? JSONDecoder().decode([User].self, from: data) {
-                allUsers = users
-                print("Loaded \(users.count) users from UserDefaults")
-            } else {
-                // Fallback to keychain if no UserDefaults data
-                let userIds = keychainManager.getAllUserIds()
-                print("Found user IDs in keychain: \(userIds)")
-                var users: [User] = []
-                
-                for userId in userIds {
-                    if let credentials = try? keychainManager.getCredentials(for: userId) {
-                        let user = User(
-                            id: UUID(uuidString: credentials.userId) ?? UUID(),
-                            email: credentials.email,
-                            name: credentials.name,
-                            createdAt: credentials.createdAt
-                        )
-                        users.append(user)
-                        print("Added user: \(user.name ?? user.email) with ID: \(user.id.uuidString)")
-                    }
+            // Always load from Keychain first as it's the source of truth
+            let userIds = keychainManager.getAllUserIds()
+            print("Found user IDs in keychain: \(userIds)")
+            var users: [User] = []
+            
+            for userId in userIds {
+                if let credentials = try? keychainManager.getCredentials(for: userId) {
+                    let user = User(
+                        id: UUID(uuidString: credentials.userId) ?? UUID(),
+                        email: credentials.email,
+                        name: credentials.name,
+                        createdAt: credentials.createdAt
+                    )
+                    users.append(user)
+                    print("Added user: \(user.name ?? user.email) with ID: \(user.id.uuidString)")
                 }
-                
-                allUsers = users
-                print("Loaded \(users.count) users from keychain")
             }
+            
+            allUsers = users
+            print("Loaded \(users.count) users from keychain")
             
             // Load current user from persisted state
             let currentUserId = UserDefaults.standard.string(forKey: "current_user_id")
@@ -236,5 +232,27 @@ final class UserManager: UserManagerProtocol {
         let encoder = JSONEncoder()
         let data = try encoder.encode(allUsers)
         UserDefaults.standard.set(data, forKey: "user_list")
+    }
+    
+    @MainActor private func loadAllUsersFromKeychain() async {
+        let userIds = keychainManager.getAllUserIds()
+        print("Found user IDs in keychain: \(userIds)")
+        var users: [User] = []
+        
+        for userId in userIds {
+            if let credentials = try? keychainManager.getCredentials(for: userId) {
+                let user = User(
+                    id: UUID(uuidString: credentials.userId) ?? UUID(),
+                    email: credentials.email,
+                    name: credentials.name,
+                    createdAt: credentials.createdAt
+                )
+                users.append(user)
+                print("Added user from keychain: \(user.name ?? user.email) with ID: \(user.id.uuidString)")
+            }
+        }
+        
+        allUsers = users
+        print("Loaded \(users.count) users from keychain")
     }
 } 
